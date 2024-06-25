@@ -40,10 +40,11 @@ pipeline {
     
     stage('Build and Push Image') {
         steps {
-
-            app = docker.build("docker.io/msimmons719/anchore-demo")
-            docker.withRegistry('https://registry.hub.docker.com', 'docker-hub') {            
-                app.push("latest")
+            script {
+                app = docker.build("docker.io/msimmons719/anchore-demo")
+                docker.withRegistry('https://registry.hub.docker.com', 'docker-hub') {            
+                    app.push("latest")
+                }
             }
         }
     } // end stage "build and push"
