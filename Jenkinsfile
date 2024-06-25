@@ -1,35 +1,19 @@
 pipeline {
   environment {
     //
-    // Initial variable setup
-    //
     // you need a credential named 'docker-hub' with your DockerID/password to push images
-    // we will create DOCKER_HUB_USR and DOCKER_HUB_PSW from the docker-hub credential
     CREDENTIAL = "docker-hub"
     DOCKER_HUB = credentials("$CREDENTIAL")
-    //
-    // now we'll set up our image name/tag
-    //
     REGISTRY = "docker.io"
-    BRANCH_NAME = "main"
-    REPOSITORY = "${DOCKER_HUB_USR}/anchore-demo"
-    TAG = "latest"
-    IMAGE = "docker.io/msimmons719/anchore-demo:latest"
-    //
-    // and we need credentials for anchorectl
-    //
-    ANCHORECTL_URL = credentials('Anchorectl_Url')
-    ANCHORECTL_USERNAME = credentials('Anchorectl_Username')
-    ANCHORECTL_PASSWORD = credentials('Anchorectl_Password')
-    //
-    // if you want to gate on policy failures, set this to "true"
-    //
-    ANCHORE_FAIL_ON_POLICY = "false"
+    REPOSITORY = "${DOCKER_HUB_USR}/${JOB_BASE_NAME}"
+    BRANCH_NAME = "${GIT_BRANCH.split("/")[1]}"
+    TAG = "${BRANCH_NAME}"
+    IMAGELINE = "${REGISTRY}/${REPOSITORY}:${TAG} Dockerfile"
     //
   } // end environment 
   
   agent any
-
+  
   stages {
     
     stage('Checkout SCM') {
@@ -39,81 +23,68 @@ pipeline {
     } // end stage "checkout scm"
     
     stage('Build and Push Image') {
-        steps {
-            script {
-                app = docker.build("docker.io/msimmons719/anchore-demo")
-                docker.withRegistry('https://registry.hub.docker.com', 'docker-hub') {            
-                    app.push("latest")
-                }
-            }
-        }
+      steps {
+        sh """
+          echo ${DOCKER_HUB_PSW} | docker login -u ${DOCKER_HUB_USR} --password-stdin
+          docker build -t ${REPOSITORY}:${TAG} --pull -f ./Dockerfile .
+          docker push ${REPOSITORY}:${TAG}
+        """
+      } // end steps
     } // end stage "build and push"
     
-    stage('Analyze Image with anchorectl') {
+    stage('Analyze Image with Anchore plugin') {
       steps {
-        //
-        // first, install latest version of anchorectl 
-        // (you could just install this into the jenkins build node at /usr/local/bin but for demo 
-        // purposes this is probably better since it ensures I always have the newest version and I 
-        // don't run this pipeline very frequently)
-        //
-        sh """
-          curl -sSfL  https://anchorectl-releases.anchore.io/anchorectl/install.sh  | sh -s -- -b $HOME/.local/bin  
-          export PATH="$HOME/.local/bin/:$PATH"   
-          ### you could also install grype and syft depending on what you need to do:
-          # curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin 
-          # curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $HOME/.local/bin 
-          ### if you want to debug and check connectivity and anchorectl variables etc, 
-          # anchorectl system status
-        """
-        // 
-        // now we queue the image for analysis
-        // the --wait is only necessary if you want to check the results, you can omit that if you are just
-        // queueing the image and will check results later.
-        //
-        sh """
-          ### you almost always should use --force when supplying a dockerfile
-          ${HOME}/.local/bin/anchorectl image add --no-auto-subscribe --force --dockerfile ./Dockerfile ${IMAGE}
-          #
-          ### the jenkins plugin will pull the evaluation and vulnerability output and 
-          ### archive them as build artifacts, if you want to do that here, use these:
-          # anchorectl image vuln ${IMAGE}
-          # anchorectl image check --detail ${IMAGE}
-          #
-          ### alternatively, if you want to break the pipeline if the policy evaluation fails,
-          #
-          # set -o pipefail
-          # if [ "$ANCHORE_FAIL_ON_POLICY" == "true" ] ; then 
-          #   anchorectl image check --detail --fail-based-on-results ${IMAGE} ; 
-          # else 
-          #   anchorectl image check --detail ${IMAGE} ; 
-          # fi    
-          #
-        """
+        // anchore plugin for jenkins: https://www.jenkins.io/doc/pipeline/steps/anchore-container-scanner/
+        // first, we need to write out the "anchore_images" file which is what the plugin reads to know
+        // which images to scan:
+        writeFile file: 'anchore_images', text: IMAGELINE
+        // call the scanner, wrapin catchError so we can break the pipeline but still run the
+        // cleanup stage if the evaluation fails
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+          // forceAnalyze is a good idea since we're passing a Dockerfile with the image
+          anchore name: 'anchore_images', forceAnalyze: 'true', engineRetries: '900'
+        }
+        // if we want to use the command line tool anchorectl instead of the jenkins plugin
+        // please take a look at https://github.com/pvnovarese/anchorectl-pipeline 
+        // and https://github.com/pvnovarese/2023-03-demo/blob/main/Jenkinsfile-anchorectl
         //
         // if you want continuous re-evaluation in the background, you can turn it on with these:
+        // sh """
+        //   curl -sSfL  https://anchorectl-releases.anchore.io/anchorectl/install.sh  | sh -s -- -b $HOME/.local/bin  
+        //   export PATH="$HOME/.local/bin/:$PATH"   
         //   anchorectl subscription activate policy_eval ${IMAGE}
         //   anchorectl subscription activate vuln_update ${IMAGE}
+        // """
         // and in this case you would probably also want to configure "policy & vulnerability" updates
         // in "Events & Notifications" -> "Manage Notification Endpoints" 
         //
       } // end steps
-    } // end stage "analyze image with anchorectl"     
+    } // end stage "analyze image 1 with anchore plugin"     
+    
+    // optional, you could promote the image here 
+    // 
+    // stage('Promote Image') {
+    //  steps {
+    //    sh """
+    //      docker tag ${REPOSITORY}:${TAG} ${REPOSITORY}:${BRANCH_NAME}
+    //      docker push ${REPOSITORY}:${BRANCH_NAME}
+    //    """
+    //  } // end steps
+    // } // end stage "Promote Image"        
     
     stage('Clean up') {
       steps {
         //
         // don't need the image(s) anymore so let's rm it
         //
-        sh 'docker image rm ${IMAGE} ${IMAGE}-prod || failure=1'
+        sh 'docker image rm ${REPOSITORY}:${TAG} ${REPOSITORY}:${BRANCH_NAME} || failure=1'
         // the || failure=1 just allows us to continue even if one or both of the tags we're
         // rm'ing doesn't exist (e.g. if the evaluation failed, we might end up here without 
         // re-tagging the image, so ${BRANCH_NAME} wouldn't exist.
         //
-        // you could also use the plugin here to generate the human-readable report and 
-        // archive the results:
-        // sh 'echo ${IMAGE} > anchore_images'
-        // anchore name: 'anchore_images', engineRetries: '300', bailOnFail: 'false'    
+        // if we used anchore-cli above, we should probably use the plugin here to archive the evaluation
+        // and generate the report:
+        //anchore name: 'anchore_images', forceAnalyze: 'true', engineRetries: '900'        
       } // end steps
     } // end stage "clean up"
     
