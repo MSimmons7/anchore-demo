@@ -29,7 +29,6 @@ pipeline {
   } // end environment 
   
   agent any
-  def app
 
   stages {
     
@@ -40,10 +39,12 @@ pipeline {
     } // end stage "checkout scm"
     
     stage('Build and Push Image') {
-      app = docker.build("docker.io/msimmons719/anchore-demo")
-      docker.withRegistry('https://registry.hub.docker.com', 'docker-hub') {            
-        app.push("latest")
-      }
+        steps {
+            app = docker.build("docker.io/msimmons719/anchore-demo")
+            docker.withRegistry('https://registry.hub.docker.com', 'docker-hub') {            
+                app.push("latest")
+            }
+        }
     } // end stage "build and push"
     
     stage('Analyze Image with anchorectl') {
