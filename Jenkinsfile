@@ -8,7 +8,7 @@ pipeline {
     REPOSITORY = "${DOCKER_HUB_USR}/${JOB_BASE_NAME}"
     BRANCH_NAME = "${GIT_BRANCH.split("/")[1]}"
     TAG = "${BRANCH_NAME}"
-    IMAGELINE = "${REGISTRY}/${REPOSITORY}:${TAG} Dockerfile"
+    IMAGELINE = "docker.io/msimmons719/anchore-demo:latest Dockerfile"
     //
   } // end environment 
   
@@ -22,15 +22,15 @@ pipeline {
       } // end steps
     } // end stage "checkout scm"
     
-    stage('Build and Push Image') {
-      steps {
-        sh """
-          echo ${DOCKER_HUB_PSW} | docker login -u ${DOCKER_HUB_USR} --password-stdin
-          docker build -t ${REPOSITORY}:${TAG} --pull -f ./Dockerfile .
-          docker push ${REPOSITORY}:${TAG}
-        """
-      } // end steps
-    } // end stage "build and push"
+    // stage('Build and Push Image') {
+    //   steps {
+    //     sh """
+    //       echo ${DOCKER_HUB_PSW} | docker login -u ${DOCKER_HUB_USR} --password-stdin
+    //       docker build -t ${REPOSITORY}:${TAG} --pull -f ./Dockerfile .
+    //       docker push ${REPOSITORY}:${TAG}
+    //     """
+    //   } // end steps
+    // } // end stage "build and push"
     
     stage('Analyze Image with Anchore plugin') {
       steps {
@@ -72,21 +72,6 @@ pipeline {
     //  } // end steps
     // } // end stage "Promote Image"        
     
-    stage('Clean up') {
-      steps {
-        //
-        // don't need the image(s) anymore so let's rm it
-        //
-        sh 'docker image rm ${REPOSITORY}:${TAG} ${REPOSITORY}:${BRANCH_NAME} || failure=1'
-        // the || failure=1 just allows us to continue even if one or both of the tags we're
-        // rm'ing doesn't exist (e.g. if the evaluation failed, we might end up here without 
-        // re-tagging the image, so ${BRANCH_NAME} wouldn't exist.
-        //
-        // if we used anchore-cli above, we should probably use the plugin here to archive the evaluation
-        // and generate the report:
-        //anchore name: 'anchore_images', forceAnalyze: 'true', engineRetries: '900'        
-      } // end steps
-    } // end stage "clean up"
     
   } // end stages
   
