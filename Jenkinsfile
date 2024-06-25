@@ -29,7 +29,8 @@ pipeline {
   } // end environment 
   
   agent any
-  
+  def app
+
   stages {
     
     stage('Checkout SCM') {
@@ -38,26 +39,11 @@ pipeline {
       } // end steps
     } // end stage "checkout scm"
     
-    stage('Verify Tools') {
-      steps {
-        sh """
-          which docker
-          ###
-          ### could additionally check for anchorectl here if you didn't want to fresh  
-          ### install it every time down below in the analyze stage
-          """
-      } // end steps
-    } // end stage "Verify Tools"
-
-    
     stage('Build and Push Image') {
-      steps {
-        sh """
-          echo ${DOCKER_HUB_PSW} | docker login -u ${DOCKER_HUB_USR} --password-stdin
-          docker build -t ${IMAGE} --pull -f ./Dockerfile .
-          docker push ${IMAGE}
-        """
-      } // end steps
+      app = docker.build("docker.io/msimmons719/anchore-demo")
+      docker.withRegistry('https://registry.hub.docker.com', 'docker-hub') {            
+        app.push("latest")
+      }
     } // end stage "build and push"
     
     stage('Analyze Image with anchorectl') {
@@ -110,17 +96,6 @@ pipeline {
         //
       } // end steps
     } // end stage "analyze image with anchorectl"     
-    
-    // optional, you could promote the image here 
-    stage('Promote Image') {
-      steps {
-        sh """
-          ### retag the image as "prod"
-          docker tag ${IMAGE} ${IMAGE}-prod
-          docker push ${IMAGE}-prod
-        """
-      } // end steps
-    } // end stage "Promote Image"        
     
     stage('Clean up') {
       steps {
